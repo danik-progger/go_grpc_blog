@@ -2,19 +2,90 @@ syntax = "proto3";
 
 package blog;
 
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
 option go_package = "go_grpc_blog/api/blog";
 
 service BlogService {
-  rpc GetPosts(GetPostsRequest) returns (GetPostsResponse) {}
-  rpc CreatePost(CreatePostRequest) returns (CreatePostResponse) {}
-  rpc UpdatePost(UpdatePostRequest) returns (UpdatePostResponse) {}
-  rpc DeletePost(DeletePostRequest) returns (DeletePostResponse) {}
-  rpc ToggleLike(ToggleLikeRequest) returns (ToggleLikeResponse) {}
+  rpc GetPosts(GetPostsRequest) returns (GetPostsResponse) {
+    option (google.api.http) = {
+      get: "/v1/posts"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+        parameters: {
+            headers: {
+                name: "Grpc-metadata-user-id";
+                type: STRING;
+                required: true;
+            };
+        };
+    };
+  }
+
+  rpc CreatePost(CreatePostRequest) returns (CreatePostResponse) {
+    option (google.api.http) = {
+      post: "/v1/posts"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+        parameters: {
+            headers: {
+                name: "Grpc-metadata-user-id";
+                type: STRING;
+                required: true;
+            };
+        };
+    };
+  }
+  rpc UpdatePost(UpdatePostRequest) returns (UpdatePostResponse) {
+    option (google.api.http) = {
+      put: "/v1/posts/{id}"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+        parameters: {
+            headers: {
+                name: "Grpc-metadata-user-id";
+                type: STRING;
+                required: true;
+            };
+        };
+    };
+  }
+  rpc DeletePost(DeletePostRequest) returns (DeletePostResponse) {
+    option (google.api.http) = {
+      delete: "/v1/posts/{id}"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+        parameters: {
+            headers: {
+                name: "Grpc-metadata-user-id";
+                type: STRING;
+                required: true;
+            };
+        };
+    };
+  }
+  rpc ToggleLike(ToggleLikeRequest) returns (ToggleLikeResponse) {
+    option (google.api.http) = {
+      post: "/v1/posts/{post_id}/toggle_like"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+        parameters: {
+            headers: {
+                name: "Grpc-metadata-user-id";
+                type: STRING;
+                required: true;
+            };
+        };
+    };
+  }
 }
 
 message Post {
   string id = 1;
-  string author_id = 2;
+  User author = 2;
   string body = 3;
   string created_at = 4;
   int32 likes_count = 5;

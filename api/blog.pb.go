@@ -7,6 +7,8 @@
 package blog
 
 import (
+	_ "github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2/options"
+	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -24,7 +26,7 @@ const (
 type Post struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AuthorId      string                 `protobuf:"bytes,2,opt,name=author_id,json=authorId,proto3" json:"author_id,omitempty"`
+	Author        *User                  `protobuf:"bytes,2,opt,name=author,proto3" json:"author,omitempty"`
 	Body          string                 `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
 	CreatedAt     string                 `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	LikesCount    int32                  `protobuf:"varint,5,opt,name=likes_count,json=likesCount,proto3" json:"likes_count,omitempty"`
@@ -70,11 +72,11 @@ func (x *Post) GetId() string {
 	return ""
 }
 
-func (x *Post) GetAuthorId() string {
+func (x *Post) GetAuthor() *User {
 	if x != nil {
-		return x.AuthorId
+		return x.Author
 	}
-	return ""
+	return nil
 }
 
 func (x *Post) GetBody() string {
@@ -626,10 +628,11 @@ var File_blog_proto protoreflect.FileDescriptor
 const file_blog_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"blog.proto\x12\x04blog\"\xa2\x01\n" +
+	"blog.proto\x12\x04blog\x1a\x1cgoogle/api/annotations.proto\x1a.protoc-gen-openapiv2/options/annotations.proto\"\xa9\x01\n" +
 	"\x04Post\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
-	"\tauthor_id\x18\x02 \x01(\tR\bauthorId\x12\x12\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\"\n" +
+	"\x06author\x18\x02 \x01(\v2\n" +
+	".blog.UserR\x06author\x12\x12\n" +
 	"\x04body\x18\x03 \x01(\tR\x04body\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12\x1f\n" +
@@ -665,17 +668,27 @@ const file_blog_proto_rawDesc = "" +
 	"\apost_id\x18\x01 \x01(\tR\x06postId\"4\n" +
 	"\x12ToggleLikeResponse\x12\x1e\n" +
 	"\x04post\x18\x01 \x01(\v2\n" +
-	".blog.PostR\x04post2\xd6\x02\n" +
-	"\vBlogService\x12;\n" +
-	"\bGetPosts\x12\x15.blog.GetPostsRequest\x1a\x16.blog.GetPostsResponse\"\x00\x12A\n" +
+	".blog.PostR\x04post2\xfc\x04\n" +
+	"\vBlogService\x12n\n" +
+	"\bGetPosts\x12\x15.blog.GetPostsRequest\x1a\x16.blog.GetPostsResponse\"3\x92A\x1fr\x1d\n" +
+	"\x1b\n" +
+	"\x15Grpc-metadata-user-id\x18\x01(\x01\x82\xd3\xe4\x93\x02\v\x12\t/v1/posts\x12w\n" +
 	"\n" +
-	"CreatePost\x12\x17.blog.CreatePostRequest\x1a\x18.blog.CreatePostResponse\"\x00\x12A\n" +
+	"CreatePost\x12\x17.blog.CreatePostRequest\x1a\x18.blog.CreatePostResponse\"6\x92A\x1fr\x1d\n" +
+	"\x1b\n" +
+	"\x15Grpc-metadata-user-id\x18\x01(\x01\x82\xd3\xe4\x93\x02\x0e:\x01*\"\t/v1/posts\x12|\n" +
 	"\n" +
-	"UpdatePost\x12\x17.blog.UpdatePostRequest\x1a\x18.blog.UpdatePostResponse\"\x00\x12A\n" +
+	"UpdatePost\x12\x17.blog.UpdatePostRequest\x1a\x18.blog.UpdatePostResponse\";\x92A\x1fr\x1d\n" +
+	"\x1b\n" +
+	"\x15Grpc-metadata-user-id\x18\x01(\x01\x82\xd3\xe4\x93\x02\x13:\x01*\x1a\x0e/v1/posts/{id}\x12y\n" +
 	"\n" +
-	"DeletePost\x12\x17.blog.DeletePostRequest\x1a\x18.blog.DeletePostResponse\"\x00\x12A\n" +
+	"DeletePost\x12\x17.blog.DeletePostRequest\x1a\x18.blog.DeletePostResponse\"8\x92A\x1fr\x1d\n" +
+	"\x1b\n" +
+	"\x15Grpc-metadata-user-id\x18\x01(\x01\x82\xd3\xe4\x93\x02\x10*\x0e/v1/posts/{id}\x12\x8a\x01\n" +
 	"\n" +
-	"ToggleLike\x12\x17.blog.ToggleLikeRequest\x1a\x18.blog.ToggleLikeResponse\"\x00B\x17Z\x15go_grpc_blog/api/blogb\x06proto3"
+	"ToggleLike\x12\x17.blog.ToggleLikeRequest\x1a\x18.blog.ToggleLikeResponse\"I\x92A\x1fr\x1d\n" +
+	"\x1b\n" +
+	"\x15Grpc-metadata-user-id\x18\x01(\x01\x82\xd3\xe4\x93\x02!\"\x1f/v1/posts/{post_id}/toggle_likeB\x17Z\x15go_grpc_blog/api/blogb\x06proto3"
 
 var (
 	file_blog_proto_rawDescOnce sync.Once
@@ -705,25 +718,26 @@ var file_blog_proto_goTypes = []any{
 	(*ToggleLikeResponse)(nil), // 11: blog.ToggleLikeResponse
 }
 var file_blog_proto_depIdxs = []int32{
-	0,  // 0: blog.GetPostsResponse.posts:type_name -> blog.Post
-	0,  // 1: blog.CreatePostResponse.post:type_name -> blog.Post
-	0,  // 2: blog.UpdatePostResponse.post:type_name -> blog.Post
-	0,  // 3: blog.ToggleLikeResponse.post:type_name -> blog.Post
-	2,  // 4: blog.BlogService.GetPosts:input_type -> blog.GetPostsRequest
-	4,  // 5: blog.BlogService.CreatePost:input_type -> blog.CreatePostRequest
-	6,  // 6: blog.BlogService.UpdatePost:input_type -> blog.UpdatePostRequest
-	8,  // 7: blog.BlogService.DeletePost:input_type -> blog.DeletePostRequest
-	10, // 8: blog.BlogService.ToggleLike:input_type -> blog.ToggleLikeRequest
-	3,  // 9: blog.BlogService.GetPosts:output_type -> blog.GetPostsResponse
-	5,  // 10: blog.BlogService.CreatePost:output_type -> blog.CreatePostResponse
-	7,  // 11: blog.BlogService.UpdatePost:output_type -> blog.UpdatePostResponse
-	9,  // 12: blog.BlogService.DeletePost:output_type -> blog.DeletePostResponse
-	11, // 13: blog.BlogService.ToggleLike:output_type -> blog.ToggleLikeResponse
-	9,  // [9:14] is the sub-list for method output_type
-	4,  // [4:9] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	1,  // 0: blog.Post.author:type_name -> blog.User
+	0,  // 1: blog.GetPostsResponse.posts:type_name -> blog.Post
+	0,  // 2: blog.CreatePostResponse.post:type_name -> blog.Post
+	0,  // 3: blog.UpdatePostResponse.post:type_name -> blog.Post
+	0,  // 4: blog.ToggleLikeResponse.post:type_name -> blog.Post
+	2,  // 5: blog.BlogService.GetPosts:input_type -> blog.GetPostsRequest
+	4,  // 6: blog.BlogService.CreatePost:input_type -> blog.CreatePostRequest
+	6,  // 7: blog.BlogService.UpdatePost:input_type -> blog.UpdatePostRequest
+	8,  // 8: blog.BlogService.DeletePost:input_type -> blog.DeletePostRequest
+	10, // 9: blog.BlogService.ToggleLike:input_type -> blog.ToggleLikeRequest
+	3,  // 10: blog.BlogService.GetPosts:output_type -> blog.GetPostsResponse
+	5,  // 11: blog.BlogService.CreatePost:output_type -> blog.CreatePostResponse
+	7,  // 12: blog.BlogService.UpdatePost:output_type -> blog.UpdatePostResponse
+	9,  // 13: blog.BlogService.DeletePost:output_type -> blog.DeletePostResponse
+	11, // 14: blog.BlogService.ToggleLike:output_type -> blog.ToggleLikeResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_blog_proto_init() }

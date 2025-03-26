@@ -22,9 +22,8 @@ func formatTimestamp(isoTimestamp string) (string, error) {
 	return formatted, nil
 }
 
-func sortPostsByCreatedAAt(posts []*blog.Post, ascending bool) {
+func sortPostsByCreatedAt(posts []*blog.Post, ascending bool) {
 	sort.Slice(posts, func(i, j int) bool {
-		// Parse time from "hh:mm:ss dd.mm.yyyy" format
 		parseTime := func(s string) time.Time {
 			parts := strings.Split(s, " ")
 			if len(parts) != 2 {
@@ -53,10 +52,10 @@ type Server struct {
 func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog.GetPostsResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, fmt.Errorf("missing metadata")
 	}
-	userIDs := md.Get("user-id")
-	if len(userIDs) == 0 {
+	headers := md.Get("user-id")
+	if len(headers) == 0 {
 		return nil, fmt.Errorf("user-id header is required")
 	}
 
@@ -72,7 +71,7 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 		posts = append(posts, p)
 	}
 
-	sortPostsByCreatedAAt(posts, false)
+	sortPostsByCreatedAt(posts, false)
 
 	return &blog.GetPostsResponse{Posts: posts}, nil
 }
@@ -87,6 +86,7 @@ func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*
 		return nil, fmt.Errorf("user-id header is required")
 	}
 	authorID := userIDs[0]
+	author := s.Users[authorID]
 
 	// Check if user exists
 	if _, exists := s.Users[authorID]; !exists {
@@ -100,7 +100,7 @@ func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*
 
 	newPost := &blog.Post{
 		Id:         fmt.Sprintf("post-%d", len(s.Posts)+1),
-		AuthorId:   authorID,
+		Author:   	author,
 		Body:       req.Body,
 		CreatedAt:  time,
 		LikesCount: 0,
@@ -125,8 +125,7 @@ func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*
 
 	for _, post := range s.Posts {
 		if post.Id == req.Id {
-			// Check if current user is the author
-			if post.AuthorId != currentUserID {
+			if post.Author.Id != currentUserID {
 				return nil, fmt.Errorf("only author can update the post")
 			}
 			post.Body = req.Body
@@ -151,7 +150,7 @@ func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*
 	for i, post := range s.Posts {
 		if post.Id == req.Id {
 			// Check if current user is the author
-			if post.AuthorId != currentUserID {
+			if post.Author.Id != currentUserID {
 				return nil, fmt.Errorf("only author can delete the post")
 			}
 			s.Posts = append(s.Posts[:i], s.Posts[i+1:]...)
