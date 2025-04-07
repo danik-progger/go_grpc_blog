@@ -128,9 +128,7 @@ message DeletePostRequest {
   string id = 1;
 }
 
-message DeletePostResponse {
-  bool success = 1;
-}
+message DeletePostResponse {}
 
 message ToggleLikeRequest {
   string post_id = 1;

@@ -493,7 +493,6 @@ func (x *DeletePostRequest) GetId() string {
 
 type DeletePostResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -526,13 +525,6 @@ func (x *DeletePostResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use DeletePostResponse.ProtoReflect.Descriptor instead.
 func (*DeletePostResponse) Descriptor() ([]byte, []int) {
 	return file_blog_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *DeletePostResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
 }
 
 type ToggleLikeRequest struct {
@@ -661,9 +653,8 @@ const file_blog_proto_rawDesc = "" +
 	"\x04post\x18\x01 \x01(\v2\n" +
 	".blog.PostR\x04post\"#\n" +
 	"\x11DeletePostRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\".\n" +
-	"\x12DeletePostResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\",\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x14\n" +
+	"\x12DeletePostResponse\",\n" +
 	"\x11ToggleLikeRequest\x12\x17\n" +
 	"\apost_id\x18\x01 \x01(\tR\x06postId\"4\n" +
 	"\x12ToggleLikeResponse\x12\x1e\n" +

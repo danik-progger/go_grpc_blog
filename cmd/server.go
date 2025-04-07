@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 	"fmt"
-	"time"
 	"sort"
 	"strings"
+	"time"
 
 	blog "go_grpc_blog/api"
 
@@ -100,7 +100,7 @@ func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*
 
 	newPost := &blog.Post{
 		Id:         fmt.Sprintf("post-%d", len(s.Posts)+1),
-		Author:   	author,
+		Author:     author,
 		Body:       req.Body,
 		CreatedAt:  time,
 		LikesCount: 0,
@@ -154,7 +154,7 @@ func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*
 				return nil, fmt.Errorf("only author can delete the post")
 			}
 			s.Posts = append(s.Posts[:i], s.Posts[i+1:]...)
-			return &blog.DeletePostResponse{Success: true}, nil
+			return &blog.DeletePostResponse{}, nil
 		}
 	}
 

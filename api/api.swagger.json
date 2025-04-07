@@ -237,12 +237,7 @@
       }
     },
     "blogDeletePostResponse": {
-      "type": "object",
-      "properties": {
-        "success": {
-          "type": "boolean"
-        }
-      }
+      "type": "object"
     },
     "blogGetPostsResponse": {
       "type": "object",
