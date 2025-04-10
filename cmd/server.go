@@ -8,8 +8,12 @@ import (
 	"time"
 
 	blog "go_grpc_blog/api"
+	"go_grpc_blog/db"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
 )
 
 func formatTimestamp(isoTimestamp string) (string, error) {
@@ -45,33 +49,46 @@ func sortPostsByCreatedAt(posts []*blog.Post, ascending bool) {
 
 type Server struct {
 	blog.UnimplementedBlogServiceServer
-	Posts []*blog.Post
-	Users map[string]*blog.User
+	Sql_DB *gorm.DB
+	// Posts  []*blog.Post
+	// Users  map[string]*blog.User
+}
+
+func dbPostToProtoPost(dbPost *db.Post, db *gorm.DB, userID string) *blog.Post {
+	return &blog.Post{
+		Id: dbPost.ID,
+		Author: &blog.User{
+			Id:       dbPost.Author.ID,
+			NickName: dbPost.Author.NickName,
+			PhotoUrl: dbPost.Author.PhotoURL,
+		},
+		Body:      dbPost.Body,
+		CreatedAt: dbPost.CreatedAt.Format("15:04:05 02.01.2006"),
+	}
 }
 
 func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog.GetPostsResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing metadata")
+		return nil, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	headers := md.Get("user-id")
 	if len(headers) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
+	}
+	userID := headers[0]
+
+	var dbPosts []db.Post
+	result := s.Sql_DB.Preload("Author").Order("created_at desc").Limit(int(req.Limit)).Offset(int(req.Offset)).Find(&dbPosts)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch posts: %v", result.Error)
 	}
 
-	posts := make([]*blog.Post, 0)
-	for i, p := range s.Posts {
-		if int32(i) < req.Offset {
-			continue
-		}
-
-		if int32(len(posts)) >= req.Limit {
-			break
-		}
-		posts = append(posts, p)
+	// Convert db.Post to blog.Post
+	posts := make([]*blog.Post, len(dbPosts))
+	for i, p := range dbPosts {
+		posts[i] = dbPostToProtoPost(&p, s.Sql_DB, userID)
 	}
-
-	sortPostsByCreatedAt(posts, false)
 
 	return &blog.GetPostsResponse{Posts: posts}, nil
 }
@@ -79,111 +96,148 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*blog.CreatePostResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing user id")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	authorID := userIDs[0]
-	author := s.Users[authorID]
 
-	// Check if user exists
-	if _, exists := s.Users[authorID]; !exists {
-		return nil, fmt.Errorf("user not found")
+	var user db.User
+	result := s.Sql_DB.First(&user, "id = ?", authorID)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "user not found: %v", result.Error)
 	}
 
-	time, err := formatTimestamp(time.Now().Format(time.RFC3339))
-	if err != nil {
-		return nil, err
+	newPost := db.Post{
+		ID:        fmt.Sprintf("post-%d", time.Now().UnixNano()),
+		Author:    user,
+		Body:      req.Body,
+		CreatedAt: time.Now(),
 	}
 
-	newPost := &blog.Post{
-		Id:         fmt.Sprintf("post-%d", len(s.Posts)+1),
-		Author:     author,
-		Body:       req.Body,
-		CreatedAt:  time,
-		LikesCount: 0,
-		IsLiked:    false,
+	result = s.Sql_DB.Create(&newPost)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create post: %v", result.Error)
 	}
 
-	s.Posts = append([]*blog.Post{newPost}, s.Posts...)
+	s.Sql_DB.Preload("Author").First(&newPost, "id = ?", newPost.ID)
+	protoPost := dbPostToProtoPost(&newPost, s.Sql_DB, authorID)
 
-	return &blog.CreatePostResponse{Post: newPost}, nil
+	return &blog.CreatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*blog.UpdatePostResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing user id")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	currentUserID := userIDs[0]
 
-	for _, post := range s.Posts {
-		if post.Id == req.Id {
-			if post.Author.Id != currentUserID {
-				return nil, fmt.Errorf("only author can update the post")
-			}
-			post.Body = req.Body
-			return &blog.UpdatePostResponse{Post: post}, nil
-		}
+	var dbPost db.Post
+	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.Id)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "post not found: %v", result.Error)
 	}
 
-	return nil, fmt.Errorf("post not found")
+	if dbPost.Author.ID != currentUserID {
+		return nil, status.Error(codes.PermissionDenied, "only author can update the post")
+	}
+
+	dbPost.Body = req.Body
+	dbPost.CreatedAt = time.Now()
+	result = s.Sql_DB.Save(&dbPost)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update post: %v", result.Error)
+	}
+
+	protoPost := dbPostToProtoPost(&dbPost, s.Sql_DB, currentUserID)
+	return &blog.UpdatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*blog.DeletePostResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing user id")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	currentUserID := userIDs[0]
 
-	for i, post := range s.Posts {
-		if post.Id == req.Id {
-			// Check if current user is the author
-			if post.Author.Id != currentUserID {
-				return nil, fmt.Errorf("only author can delete the post")
-			}
-			s.Posts = append(s.Posts[:i], s.Posts[i+1:]...)
-			return &blog.DeletePostResponse{}, nil
-		}
+	var dbPost db.Post
+	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.Id)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "post not found: %v", result.Error)
 	}
 
-	return nil, fmt.Errorf("post not found")
+	if dbPost.Author.ID != currentUserID {
+		return nil, status.Error(codes.PermissionDenied, "only author can delete the post")
+	}
+
+	result = s.Sql_DB.Delete(&dbPost)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete post: %v", result.Error)
+	}
+
+	return &blog.DeletePostResponse{}, nil
 }
 
-func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*blog.ToggleLikeResponse, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil, fmt.Errorf("missing user id")
-	}
-	userIDs := md.Get("user-id")
-	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
-	}
+// func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*blog.ToggleLikeResponse, error) {
+// 	md, ok := metadata.FromIncomingContext(ctx)
+// 	if !ok {
+// 		return nil, fmt.Errorf("missing user id")
+// 	}
+// 	userIDs := md.Get("user-id")
+// 	if len(userIDs) == 0 {
+// 		return nil, fmt.Errorf("user-id header is required")
+// 	}
 
-	for _, post := range s.Posts {
-		if post.Id == req.PostId {
-			// Mock like toggle
-			if post.IsLiked {
-				post.LikesCount--
-				post.IsLiked = false
-			} else {
-				post.LikesCount++
-				post.IsLiked = true
-			}
-			return &blog.ToggleLikeResponse{Post: post}, nil
-		}
-	}
+// 	// Find the post in the database
+// 	var dbPost db.Post
+// 	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.PostId)
+// 	if result.Error != nil {
+// 		return nil, fmt.Errorf("post not found: %v", result.Error)
+// 	}
 
-	return nil, fmt.Errorf("post not found")
-}
+// 	// Check if the post is already liked by this user
+// 	var postLike db.PostLike
+// 	var isLiked bool
+// 	result = s.Sql_DB.Where("post_id = ? AND user_id = ?", req.PostId, userID).First(&postLike)
+// 	if result.Error == nil {
+// 		// Like exists, remove it
+// 		isLiked = false
+// 		result = s.Sql_DB.Delete(&postLike)
+// 		if result.Error != nil {
+// 			return nil, fmt.Errorf("failed to remove like: %v", result.Error)
+// 		}
+// 	} else {
+// 		// Like doesn't exist, add it
+// 		isLiked = true
+// 		postLike = db.PostLike{
+// 			PostID: req.PostId,
+// 			UserID: userID,
+// 		}
+// 		result = s.Sql_DB.Create(&postLike)
+// 		if result.Error != nil {
+// 			return nil, fmt.Errorf("failed to add like: %v", result.Error)
+// 		}
+// 	}
+
+// 	// Get updated post with like count
+// 	protoPost := dbPostToProtoPost(&dbPost, s.Sql_DB, userID)
+
+// 	// Get likes count
+// 	var likesCount int64
+// 	s.Sql_DB.Model(&db.PostLike{}).Where("post_id = ?", req.PostId).Count(&likesCount)
+// 	protoPost.LikesCount = int32(likesCount)
+// 	protoPost.IsLiked = isLiked
+
+// 	return &blog.ToggleLikeResponse{Post: protoPost}, nil
+// }

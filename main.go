@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net"
-	"io/fs"
 	"net/http"
 
 	"embed"
@@ -26,9 +26,14 @@ var swaggerData []byte
 var swaggerFiles embed.FS
 
 func main() {
+	sql_db, err := db.InitDB("host=localhost dbname=postgres port=5432 sslmode=disable TimeZone=UTC")
+	if err != nil {
+		log.Fatalf("failed to initialize sql database: %v", err)
+	}
 	s := &server.Server{
-		Users: db.GetUsers(),
-		Posts: db.GetPosts(),
+		Sql_DB: sql_db,
+		// Users:  db.GetUsers(),
+		// Posts:  db.GetPosts(),
 	}
 
 	// Start gRPC server
