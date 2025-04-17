@@ -65,27 +65,34 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 	}
 
 	posts := make([]*blog.Post, len(dbPosts))
+
+	pipe := s.Redis_DB.Pipeline()
+	likeCmds := make([]*redis.StringCmd, len(dbPosts))
+	userLikeCmds := make([]*redis.StringCmd, len(dbPosts))
+
 	for i, p := range dbPosts {
 		postLikesKey := "post:" + p.ID + ":likes"
+		likeCmds[i] = pipe.HGet(ctx, postLikesKey, "total-likes")
+		userLikeCmds[i] = pipe.HGet(ctx, postLikesKey, userID)
+	}
 
-		totalLikes, err := s.Redis_DB.HGet(ctx, postLikesKey, "total-likes").Int64()
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch likes: %v", err)
+	}
+
+	for i, p := range dbPosts {
+		totalLikes, err := likeCmds[i].Int64()
 		if err != nil && err != redis.Nil {
-			return nil, status.Errorf(codes.Internal, "failed to get likes count for post %s: %v", p.ID, err)
+			totalLikes = 0
 		}
 		if err == redis.Nil {
-			totalLikes = 0
-			if err := s.Redis_DB.HSet(ctx, postLikesKey, "total-likes", totalLikes).Err(); err != nil {
+			if err := s.Redis_DB.HSet(ctx, "post:"+p.ID+":likes", "total-likes", 0).Err(); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to initialize likes count for post %s: %v", p.ID, err)
 			}
 		}
 
-		isLiked, err := s.Redis_DB.HGet(ctx, postLikesKey, userID).Bool()
-		if err != nil && err != redis.Nil {
-			return nil, status.Errorf(codes.Internal, "failed to check like status for post %s: %v", p.ID, err)
-		}
-		if err == redis.Nil {
-			isLiked = false
-		}
+		isLikedStr, err := userLikeCmds[i].Result()
+		isLiked := err == nil && isLikedStr == "1"
 
 		post := dbPostToProtoPost(&p, userID)
 		post.LikesCount = int32(totalLikes)
