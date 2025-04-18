@@ -15,7 +15,10 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -30,6 +33,7 @@ var swaggerData []byte
 var swaggerFiles embed.FS
 
 func main() {
+	// Logger
 	logger, err := zap.NewProduction()
 	if err != nil {
 		panic(err)
@@ -37,12 +41,14 @@ func main() {
 	defer logger.Sync()
 	log.Println("🟢 Logger initialized")
 
+	// SQL
 	sql_db, err := db.InitDB("host=localhost dbname=postgres port=5432 sslmode=disable TimeZone=UTC")
 	if err != nil {
 		log.Fatalf("🔴 Failed to initialize sql database: %v", err)
 	}
 	log.Println("🟢 Starting SQL DB  on port 5432")
 
+	// Redis
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 
 	ctx := context.Background()
@@ -52,10 +58,32 @@ func main() {
 	}
 	log.Println("🟢 Starting Redis DB on port 6379")
 
+	// Metrics
+	timeToGetLike := prometheus.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name:    "http_response_time_seconds",
+            Help:    "Duration of HTTP requests in seconds",
+            Buckets: []float64{0.001, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10},
+        },
+        []string{"from", "what"},
+    )
+	prometheus.MustRegister(timeToGetLike)
+	go func() {
+		server := &http.Server{
+			Addr:    ":9000",
+			Handler: promhttp.Handler(),
+		}
+
+		log.Println("🟢 Serving metrics on http://0.0.0.0:9000")
+		log.Fatalln(server.ListenAndServe())
+	}()
+
+	// Init main server
 	s := &server.Server{
-		Logger:   logger,
-		Sql_DB:   sql_db,
-		Redis_DB: rdb,
+		Logger:              logger,
+		TimeToGetPosts:      timeToGetLike,
+		Sql_DB:              sql_db,
+		Redis_DB:            rdb,
 	}
 
 	// Start gRPC server
@@ -67,6 +95,7 @@ func main() {
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			grpc_zap.UnaryServerInterceptor(logger),
+			grpc_prometheus.UnaryServerInterceptor,
 		),
 	)
 	blog.RegisterBlogServiceServer(grpcServer, s)
@@ -86,6 +115,7 @@ func main() {
 	}
 	blog.RegisterBlogServiceHandler(context.Background(), gwmux, conn)
 
+	// Swagger
 	mux := http.NewServeMux()
 	mux.Handle("/", gwmux)
 	mux.HandleFunc("/swagger-ui/swagger.json", func(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +129,7 @@ func main() {
 
 	mux.Handle("/swagger-ui/", http.StripPrefix("/swagger-ui/", http.FileServer(http.FS(fSys))))
 
+	// Gateway
 	gwServer := &http.Server{
 		Addr:    ":8090",
 		Handler: mux,

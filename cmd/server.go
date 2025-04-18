@@ -11,6 +11,7 @@ import (
 	"go_grpc_blog/db"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -20,9 +21,10 @@ import (
 
 type Server struct {
 	blog.UnimplementedBlogServiceServer
-	Logger   *zap.Logger
-	Sql_DB   *gorm.DB
-	Redis_DB *redis.Client
+	Logger              *zap.Logger
+	TimeToGetPosts      *prometheus.HistogramVec
+	Sql_DB              *gorm.DB
+	Redis_DB            *redis.Client
 }
 
 func NewServer(sqlDB *gorm.DB, redisAddr string) *Server {
@@ -87,9 +89,12 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 
 	s.Logger.Info("Redis before request", zap.String("from", "GetPosts"))
 	s.Logger.Info("Redis before request", zap.String("wants to", "get posts and their likes"))
+	start := time.Now()
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch likes: %v", err)
 	}
+	duration := time.Since(start).Seconds()
+	s.TimeToGetPosts.WithLabelValues("GetPosts", "get liked by user and total likes for all posts").Observe(duration)
 	s.Logger.Info("Redis after request", zap.String("result", "success"))
 
 
@@ -101,9 +106,12 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 		if err == redis.Nil {
 			s.Logger.Info("Redis before request", zap.String("from", "GetPosts"))
 			s.Logger.Info("Redis before request", zap.String("wants to", "set post total likes"))
+			start := time.Now()
 			if err := s.Redis_DB.HSet(ctx, "post:"+p.ID+":likes", "total-likes", 0).Err(); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to initialize likes count for post %s: %v", p.ID, err)
 			}
+			duration := time.Since(start).Seconds()
+			s.TimeToGetPosts.WithLabelValues("GetPosts").Observe(duration)
 			s.Logger.Info("Redis after request", zap.String("result", "success"))
 		}
 
@@ -269,12 +277,14 @@ func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*
 
 	s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
 	s.Logger.Info("Redis before request", zap.String("wants to", "find if user liked post"))
+	start := time.Now()
 	isLiked, err := s.Redis_DB.HGet(ctx, postLikesKey, userID).Bool()
 	if err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "failed to check like status: %v", err)
 	}
+	duration := time.Since(start).Seconds()
+	s.TimeToGetPosts.WithLabelValues("ToggleLike", "get isLiked by user").Observe(duration)
 	s.Logger.Info("Redis after request", zap.String("result", "success"))
-
 
 	if isLiked {
 		s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
@@ -315,9 +325,12 @@ func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*
 	s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
 	s.Logger.Info("Redis before request", zap.String("wants to", "get total likes"))
 	totalLikes, err := s.Redis_DB.HGet(ctx, postLikesKey, "total-likes").Int64()
+	start = time.Now()
 	if err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "failed to get total likes: %v", err)
 	}
+	duration = time.Since(start).Seconds()
+	s.TimeToGetPosts.WithLabelValues("ToggleLike", "get total likes").Observe(duration)
 	s.Logger.Info("Redis after request", zap.String("result", "success"))
 
 	if err == redis.Nil {
