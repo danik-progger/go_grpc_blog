@@ -85,9 +85,13 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 		userLikeCmds[i] = pipe.HGet(ctx, postLikesKey, userID)
 	}
 
+	s.Logger.Info("Redis before request", zap.String("from", "GetPosts"))
+	s.Logger.Info("Redis before request", zap.String("wants to", "get posts and their likes"))
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch likes: %v", err)
 	}
+	s.Logger.Info("Redis after request", zap.String("result", "success"))
+
 
 	for i, p := range dbPosts {
 		totalLikes, err := likeCmds[i].Int64()
@@ -95,9 +99,12 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 			totalLikes = 0
 		}
 		if err == redis.Nil {
+			s.Logger.Info("Redis before request", zap.String("from", "GetPosts"))
+			s.Logger.Info("Redis before request", zap.String("wants to", "set post total likes"))
 			if err := s.Redis_DB.HSet(ctx, "post:"+p.ID+":likes", "total-likes", 0).Err(); err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to initialize likes count for post %s: %v", p.ID, err)
 			}
+			s.Logger.Info("Redis after request", zap.String("result", "success"))
 		}
 
 		isLikedStr, err := userLikeCmds[i].Result()
@@ -260,41 +267,68 @@ func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*
 
 	postLikesKey := "post:" + req.PostId + ":likes"
 
+	s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+	s.Logger.Info("Redis before request", zap.String("wants to", "find if user liked post"))
 	isLiked, err := s.Redis_DB.HGet(ctx, postLikesKey, userID).Bool()
 	if err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "failed to check like status: %v", err)
 	}
+	s.Logger.Info("Redis after request", zap.String("result", "success"))
+
 
 	if isLiked {
+		s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+		s.Logger.Info("Redis before request", zap.String("wants to", "delete like"))
 		if err := s.Redis_DB.HDel(ctx, postLikesKey, userID).Err(); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to remove like from Redis: %v", err)
 		}
+		s.Logger.Info("Redis after request", zap.String("result", "success"))
+
+		s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+		s.Logger.Info("Redis before request", zap.String("wants to", "decrement total likes"))
 		if err := s.Redis_DB.HIncrBy(ctx, postLikesKey, "total-likes", -1).Err(); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to decrement total likes: %v", err)
 		}
+		s.Logger.Info("Redis after request", zap.String("result", "success"))
+
 		isLiked = false
 	} else {
+		s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+		s.Logger.Info("Redis before request", zap.String("wants to", "set like"))
 		if err := s.Redis_DB.HSet(ctx, postLikesKey, userID, true).Err(); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to add like to Redis: %v", err)
 		}
+		s.Logger.Info("Redis after request", zap.String("result", "success"))
+
+		s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+		s.Logger.Info("Redis before request", zap.String("wants to", "increment total likes"))
 		if err := s.Redis_DB.HIncrBy(ctx, postLikesKey, "total-likes", 1).Err(); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to increment total likes: %v", err)
 		}
+		s.Logger.Info("Redis after request", zap.String("result", "success"))
+
 		isLiked = true
 	}
 
 	protoPost := dbPostToProtoPost(&dbPost, userID)
 
+	s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+	s.Logger.Info("Redis before request", zap.String("wants to", "get total likes"))
 	totalLikes, err := s.Redis_DB.HGet(ctx, postLikesKey, "total-likes").Int64()
 	if err != nil && err != redis.Nil {
 		return nil, status.Errorf(codes.Internal, "failed to get total likes: %v", err)
 	}
+	s.Logger.Info("Redis after request", zap.String("result", "success"))
+
 	if err == redis.Nil {
+		s.Logger.Info("Redis before request", zap.String("from", "ToggleLike"))
+		s.Logger.Info("Redis before request", zap.String("wants to", "set total likes"))
 		pipe := s.Redis_DB.Pipeline()
 		pipe.HSet(ctx, postLikesKey, "total-likes", totalLikes)
 		if _, err := pipe.Exec(ctx); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to initialize Redis likes: %v", err)
 		}
+		s.Logger.Info("Redis after request", zap.String("result", "success"))
 	}
 
 	protoPost.LikesCount = int32(totalLikes)
