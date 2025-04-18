@@ -14,7 +14,10 @@ import (
 	db "go_grpc_blog/db"
 
 	"github.com/go-redis/redis/v8"
+	grpc_zap "github.com/grpc-ecosystem/go-grpc-middleware/logging/zap"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
@@ -27,6 +30,13 @@ var swaggerData []byte
 var swaggerFiles embed.FS
 
 func main() {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic(err)
+	}
+	defer logger.Sync()
+	log.Println("🟢 Logger initialized")
+
 	sql_db, err := db.InitDB("host=localhost dbname=postgres port=5432 sslmode=disable TimeZone=UTC")
 	if err != nil {
 		log.Fatalf("🔴 Failed to initialize sql database: %v", err)
@@ -43,6 +53,7 @@ func main() {
 	log.Println("🟢 Starting Redis DB on port 6379")
 
 	s := &server.Server{
+		Logger:   logger,
 		Sql_DB:   sql_db,
 		Redis_DB: rdb,
 	}
@@ -53,7 +64,11 @@ func main() {
 		log.Fatalf("🔴 Failed to listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			grpc_zap.UnaryServerInterceptor(logger),
+		),
+	)
 	blog.RegisterBlogServiceServer(grpcServer, s)
 	reflection.Register(grpcServer)
 

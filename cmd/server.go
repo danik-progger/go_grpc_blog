@@ -2,13 +2,16 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	blog "go_grpc_blog/api"
 	"go_grpc_blog/db"
 
 	"github.com/go-redis/redis/v8"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -17,6 +20,7 @@ import (
 
 type Server struct {
 	blog.UnimplementedBlogServiceServer
+	Logger   *zap.Logger
 	Sql_DB   *gorm.DB
 	Redis_DB *redis.Client
 }
@@ -48,6 +52,10 @@ func dbPostToProtoPost(dbPost *db.Post, userID string) *blog.Post {
 }
 
 func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog.GetPostsResponse, error) {
+	s.Logger.Info("Request", zap.String("to", "GetPosts"))
+	s.Logger.Info("Params", zap.Int32("limit", req.Limit))
+	s.Logger.Info("Params", zap.Int32("offset", req.Offset))
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing metadata")
@@ -57,6 +65,7 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	userID := headers[0]
+	s.Logger.Info("Params", zap.String("authorId", userID))
 
 	var dbPosts []db.Post
 	result := s.Sql_DB.Preload("Author").Order("created_at desc").Limit(int(req.Limit)).Offset(int(req.Offset)).Find(&dbPosts)
@@ -100,10 +109,18 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 		posts[i] = post
 	}
 
+	jsonPosts, err := json.MarshalIndent(posts, " ", " ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.Logger.Info("Success", zap.ByteString("posts", jsonPosts))
 	return &blog.GetPostsResponse{Posts: posts}, nil
 }
 
 func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*blog.CreatePostResponse, error) {
+	s.Logger.Info("Request", zap.String("to", "CreatePost"))
+	s.Logger.Info("Params", zap.String("body", req.Body))
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing user id")
@@ -113,6 +130,7 @@ func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*
 		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	authorID := userIDs[0]
+	s.Logger.Info("Params", zap.String("authorId", authorID))
 
 	var user db.User
 	result := s.Sql_DB.First(&user, "id = ?", authorID)
@@ -135,10 +153,19 @@ func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*
 	s.Sql_DB.Preload("Author").First(&newPost, "id = ?", newPost.ID)
 	protoPost := dbPostToProtoPost(&newPost, authorID)
 
+	jsonPost, err := json.MarshalIndent(protoPost, " ", " ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.Logger.Info("Success", zap.ByteString("post", jsonPost))
 	return &blog.CreatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*blog.UpdatePostResponse, error) {
+	s.Logger.Info("Request", zap.String("to", "UpdatePost"))
+	s.Logger.Info("Params", zap.String("PostId", req.Id))
+	s.Logger.Info("Params", zap.String("body", req.Body))
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing user id")
@@ -148,6 +175,7 @@ func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*
 		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	currentUserID := userIDs[0]
+	s.Logger.Info("Params", zap.String("authorId", currentUserID))
 
 	var dbPost db.Post
 	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.Id)
@@ -167,10 +195,18 @@ func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*
 	}
 
 	protoPost := dbPostToProtoPost(&dbPost, currentUserID)
+	jsonPost, err := json.MarshalIndent(protoPost, " ", " ")
+	if err != nil {
+		log.Fatal(err)
+	}
+	s.Logger.Info("Success", zap.ByteString("post", jsonPost))
 	return &blog.UpdatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*blog.DeletePostResponse, error) {
+	s.Logger.Info("Request", zap.String("to", "DeletePost"))
+	s.Logger.Info("Params", zap.String("PostId", req.Id))
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing user id")
@@ -180,6 +216,7 @@ func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*
 		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	currentUserID := userIDs[0]
+	s.Logger.Info("Params", zap.String("authorId", currentUserID))
 
 	var dbPost db.Post
 	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.Id)
@@ -196,10 +233,14 @@ func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*
 		return nil, status.Errorf(codes.Internal, "failed to delete post: %v", result.Error)
 	}
 
+	s.Logger.Info("Success", zap.String("deleted", dbPost.ID))
 	return &blog.DeletePostResponse{}, nil
 }
 
 func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*blog.ToggleLikeResponse, error) {
+	s.Logger.Info("Request", zap.String("to", "ToggleLike"))
+	s.Logger.Info("Params", zap.String("PostId", req.PostId))
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing metadata")
@@ -209,6 +250,7 @@ func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*
 		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	userID := userIDs[0]
+	s.Logger.Info("Params", zap.String("authorId", userID))
 
 	var dbPost db.Post
 	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.PostId)
@@ -258,5 +300,6 @@ func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*
 	protoPost.LikesCount = int32(totalLikes)
 	protoPost.IsLiked = isLiked
 
+	s.Logger.Info("Success", zap.Bool("liked", isLiked))
 	return &blog.ToggleLikeResponse{Post: protoPost}, nil
 }
