@@ -59,31 +59,62 @@ func main() {
 	log.Println("🟢 Starting Redis DB on port 6379")
 
 	// Metrics
+	// We can analyze histogram for each method and each operation
 	timeToGetLike := prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name:    "http_response_time_seconds",
-            Help:    "Duration of HTTP requests in seconds",
-            Buckets: []float64{0.001, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10},
-        },
-        []string{"from", "what"},
-    )
+		prometheus.HistogramOpts{
+			Name:    "Duration_of_requests_to_Redis_DB_in_seconds",
+			Buckets: []float64{0.001, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10},
+		},
+		[]string{"endpoint", "operation"},
+	)
 	prometheus.MustRegister(timeToGetLike)
+
+	// Now we cache limit=10 offset=0. What if these boundaries are wrong and we
+	// need to use different offset or different amount of posts to cache
+	limit := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "Limit",
+			Buckets: []float64{0, 5, 10, 15, 25, 50, 100},
+		},
+	)
+	prometheus.MustRegister(limit)
+	offset := prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "Offset",
+			Buckets: []float64{0, 5, 10, 15, 25, 50, 100},
+		},
+	)
+	prometheus.MustRegister(offset)
+
+	// Measure how much time it gets in total to perform a request to each endpoint
+	timeForRequest := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "Time_for_a_request",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10},
+		},
+		[]string{"endpoint"},
+	)
+	prometheus.MustRegister(timeForRequest)
+
 	go func() {
 		server := &http.Server{
 			Addr:    ":9000",
 			Handler: promhttp.Handler(),
 		}
 
-		log.Println("🟢 Serving metrics on http://0.0.0.0:9000")
+		log.Println("🟢 Serving metrics on http://0.0.0.0:9000/metrics")
 		log.Fatalln(server.ListenAndServe())
 	}()
 
 	// Init main server
 	s := &server.Server{
-		Logger:              logger,
-		TimeToGetPosts:      timeToGetLike,
-		Sql_DB:              sql_db,
-		Redis_DB:            rdb,
+		Logger:         logger,
+		TimeToGetPosts: timeToGetLike,
+		Limit:          limit,
+		Offset:         offset,
+		TimeForRequest: timeForRequest,
+		Sql_DB:         sql_db,
+		Redis_DB:       rdb,
 	}
 
 	// Start gRPC server

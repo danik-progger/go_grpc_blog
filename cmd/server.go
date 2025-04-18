@@ -21,10 +21,13 @@ import (
 
 type Server struct {
 	blog.UnimplementedBlogServiceServer
-	Logger              *zap.Logger
-	TimeToGetPosts      *prometheus.HistogramVec
-	Sql_DB              *gorm.DB
-	Redis_DB            *redis.Client
+	Logger         *zap.Logger
+	TimeToGetPosts *prometheus.HistogramVec
+	Offset         prometheus.Histogram
+	Limit          prometheus.Histogram
+	TimeForRequest *prometheus.HistogramVec
+	Sql_DB         *gorm.DB
+	Redis_DB       *redis.Client
 }
 
 func NewServer(sqlDB *gorm.DB, redisAddr string) *Server {
@@ -54,9 +57,13 @@ func dbPostToProtoPost(dbPost *db.Post, userID string) *blog.Post {
 }
 
 func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog.GetPostsResponse, error) {
+	startReq := time.Now()
 	s.Logger.Info("Request", zap.String("to", "GetPosts"))
 	s.Logger.Info("Params", zap.Int32("limit", req.Limit))
 	s.Logger.Info("Params", zap.Int32("offset", req.Offset))
+
+	s.Limit.Observe(float64(req.Limit))
+	s.Limit.Observe(float64(req.Offset))
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -97,7 +104,6 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 	s.TimeToGetPosts.WithLabelValues("GetPosts", "get liked by user and total likes for all posts").Observe(duration)
 	s.Logger.Info("Redis after request", zap.String("result", "success"))
 
-
 	for i, p := range dbPosts {
 		totalLikes, err := likeCmds[i].Int64()
 		if err != nil && err != redis.Nil {
@@ -129,10 +135,13 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 		log.Fatal(err)
 	}
 	s.Logger.Info("Success", zap.ByteString("posts", jsonPosts))
+	durationReq := time.Since(startReq).Seconds()
+	s.TimeForRequest.WithLabelValues("GetPosts").Observe(durationReq)
 	return &blog.GetPostsResponse{Posts: posts}, nil
 }
 
 func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*blog.CreatePostResponse, error) {
+	startReq := time.Now()
 	s.Logger.Info("Request", zap.String("to", "CreatePost"))
 	s.Logger.Info("Params", zap.String("body", req.Body))
 
@@ -173,10 +182,13 @@ func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*
 		log.Fatal(err)
 	}
 	s.Logger.Info("Success", zap.ByteString("post", jsonPost))
+	durationReq := time.Since(startReq).Seconds()
+	s.TimeForRequest.WithLabelValues("CreatePost").Observe(durationReq)
 	return &blog.CreatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*blog.UpdatePostResponse, error) {
+	startReq := time.Now()
 	s.Logger.Info("Request", zap.String("to", "UpdatePost"))
 	s.Logger.Info("Params", zap.String("PostId", req.Id))
 	s.Logger.Info("Params", zap.String("body", req.Body))
@@ -215,10 +227,13 @@ func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*
 		log.Fatal(err)
 	}
 	s.Logger.Info("Success", zap.ByteString("post", jsonPost))
+	durationReq := time.Since(startReq).Seconds()
+	s.TimeForRequest.WithLabelValues("UpdatePost").Observe(durationReq)
 	return &blog.UpdatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*blog.DeletePostResponse, error) {
+	startReq := time.Now()
 	s.Logger.Info("Request", zap.String("to", "DeletePost"))
 	s.Logger.Info("Params", zap.String("PostId", req.Id))
 
@@ -249,10 +264,13 @@ func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*
 	}
 
 	s.Logger.Info("Success", zap.String("deleted", dbPost.ID))
+	durationReq := time.Since(startReq).Seconds()
+	s.TimeForRequest.WithLabelValues("DeletePost").Observe(durationReq)
 	return &blog.DeletePostResponse{}, nil
 }
 
 func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*blog.ToggleLikeResponse, error) {
+	startReq := time.Now()
 	s.Logger.Info("Request", zap.String("to", "ToggleLike"))
 	s.Logger.Info("Params", zap.String("PostId", req.PostId))
 
@@ -348,5 +366,8 @@ func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*
 	protoPost.IsLiked = isLiked
 
 	s.Logger.Info("Success", zap.Bool("liked", isLiked))
+
+	durationReq := time.Since(startReq).Seconds()
+	s.TimeForRequest.WithLabelValues("ToggleLike").Observe(durationReq)
 	return &blog.ToggleLikeResponse{Post: protoPost}, nil
 }
