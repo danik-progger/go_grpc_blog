@@ -58,10 +58,16 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 	}
 	userID := headers[0]
 
-	var dbPosts []db.Post
-	result := s.Sql_DB.Preload("Author").Order("created_at desc").Limit(int(req.Limit)).Offset(int(req.Offset)).Find(&dbPosts)
-	if result.Error != nil {
-		return nil, status.Errorf(codes.Internal, "failed to fetch posts: %v", result.Error)
+	dbPosts, err := GetCachedPosts(s, ctx)
+	if err != nil {
+		fmt.Println("Problems loading cache")
+	}
+
+	if dbPosts == nil {
+		result := s.Sql_DB.Preload("Author").Order("created_at desc").Limit(int(req.Limit)).Offset(int(req.Offset)).Find(&dbPosts)
+		if result.Error != nil {
+			return nil, status.Errorf(codes.Internal, "failed to fetch posts: %v", result.Error)
+		}
 	}
 
 	posts := make([]*blog.Post, len(dbPosts))
