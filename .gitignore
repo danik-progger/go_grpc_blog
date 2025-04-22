@@ -1,0 +1,4 @@
+db/postgres/data
+db/redis/data
+db/postgres/logfile
+.DS_Store
