@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
-	"log"
 	"net"
 	"net/http"
 
@@ -39,14 +39,14 @@ func main() {
 		panic(err)
 	}
 	defer logger.Sync()
-	log.Println("🟢 Logger initialized")
+	logger.Info("main.go", zap.String("🟢", "Logger initialized"))
 
 	// SQL
 	sql_db, err := db.InitDB("host=localhost dbname=postgres port=5432 sslmode=disable TimeZone=UTC")
 	if err != nil {
-		log.Fatalf("🔴 Failed to initialize sql database: %v", err)
+		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to initialize sql database: %v", err)))
 	}
-	log.Println("🟢 Starting SQL DB  on port 5432")
+	logger.Info("main.go", zap.String("🟢", "Starting SQL DB  on port 5432"))
 
 	// Redis
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
@@ -54,9 +54,10 @@ func main() {
 	ctx := context.Background()
 	_, err = rdb.Ping(ctx).Result()
 	if err != nil {
-		log.Fatalf("🔴 Failed to initialize redis database: %v", err)
+		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to initialize redis database: %v", err)))
+
 	}
-	log.Println("🟢 Starting Redis DB on port 6379")
+	logger.Info("main.go", zap.String("🟢", "Starting Redis DB on port 6379"))
 
 	// Metrics
 	// We can analyze histogram for each method and each operation
@@ -102,8 +103,11 @@ func main() {
 			Handler: promhttp.Handler(),
 		}
 
-		log.Println("🟢 Serving metrics on http://0.0.0.0:9000/metrics")
-		log.Fatalln(server.ListenAndServe())
+		logger.Info("main.go", zap.String("🟢", "Serving metrics on http://0.0.0.0:9000/metrics"))
+
+		if err := server.ListenAndServe(); err != nil {
+			logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to start metrics server: %v", err)))
+		}
 	}()
 
 	// Init main server
@@ -120,7 +124,7 @@ func main() {
 	// Start gRPC server
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
-		log.Fatalf("🔴 Failed to listen: %v", err)
+		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to listen tcp server: %v", err)))
 	}
 
 	grpcServer := grpc.NewServer(
@@ -133,16 +137,16 @@ func main() {
 	reflection.Register(grpcServer)
 
 	go func() {
-		log.Println("🟢 Starting gRPC server on :50051")
+		logger.Info("main.go", zap.String("🟢", "Starting gRPC server on :50051"))
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("🔴 Failed to serve: %v", err)
+			logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to serve gRPC server: %v", err)))
 		}
 	}()
 
 	gwmux := runtime.NewServeMux()
 	conn, err := grpc.NewClient(":50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalln("🔴 Failed to dial server:", err)
+		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to dial server:: %v", err)))
 	}
 	blog.RegisterBlogServiceHandler(context.Background(), gwmux, conn)
 
@@ -166,6 +170,8 @@ func main() {
 		Handler: mux,
 	}
 
-	log.Println("🟢 Serving gRPC-Gateway on http://0.0.0.0:8090")
-	log.Fatalln(gwServer.ListenAndServe())
+	logger.Info("main.go", zap.String("🟢", "Serving gRPC-Gateway on http://0.0.0.0:8090"))
+	if err := gwServer.ListenAndServe(); err != nil {
+		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to serve gRPC-Gateway: %v", err)))
+	}
 }
