@@ -3,9 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"go_grpc_blog/db"
+	"time"
 
-	"github.com/go-redis/redis/v8"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -17,27 +18,30 @@ func UpdateCache(s *Server, ctx context.Context) error {
 		return status.Errorf(codes.Internal, "failed to fetch posts: %v", result.Error)
 	}
 
-	s.Redis_DB.HSet(ctx, "posts_limit=10_offset=0", result, 0)
-	if err := s.Redis_DB.HSet(ctx, "posts_limit=10_offset=0", result, 0).Err(); err != nil {
-		return status.Errorf(codes.Internal, "failed to update cache")
+	postsJSON, err := json.Marshal(dbPosts)
+	if err != nil {
+		return fmt.Errorf("failed to marshal posts: %v", err)
+	}
+
+	err = s.Redis_DB.Set(ctx, "posts_cache", postsJSON, 2*time.Minute).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set cache: %v", err)
 	}
 
 	return nil
 }
 
+
 func GetCachedPosts(s *Server, ctx context.Context) ([]db.Post, error) {
-	var dbPosts []db.Post
-	cachedData, err := s.Redis_DB.HGet(ctx, "posts", "posts_limit=10_offset=0").Result()
+	val, err := s.Redis_DB.Get(ctx, "posts_cache").Result()
 	if err != nil {
-		if err == redis.Nil {
-			return nil, nil
-		}
-		return nil, status.Errorf(codes.Internal, "failed to get posts from cache: %v", err)
+		return nil, nil
 	}
 
-	if err := json.Unmarshal([]byte(cachedData), &dbPosts); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to unmarshal cached posts: %v", err)
+	var posts []db.Post
+	if err := json.Unmarshal([]byte(val), &posts); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal posts: %v", err)
 	}
 
-	return dbPosts, nil
+	return posts, nil
 }

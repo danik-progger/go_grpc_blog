@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"embed"
 
@@ -46,6 +47,19 @@ func main() {
 		Sql_DB:   sql_db,
 		Redis_DB: rdb,
 	}
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			if err := server.UpdateCache(s, context.Background()); err != nil {
+				log.Printf("🔴 Cache update error: %v", err)
+			}
+			log.Println("🟢 Cache successfully updated")
+			<-ticker.C
+		}
+	}()
 
 	// Start gRPC server
 	lis, err := net.Listen("tcp", ":50051")

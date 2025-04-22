@@ -28,10 +28,11 @@ func NewServer(sqlDB *gorm.DB, redisAddr string) *Server {
 		DB:       0,  // use default DB
 	})
 
-	return &Server{
+	server := &Server{
 		Sql_DB:   sqlDB,
 		Redis_DB: rdb,
 	}
+	return server
 }
 
 func dbPostToProtoPost(dbPost *db.Post, userID string) *blog.Post {
