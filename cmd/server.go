@@ -3,75 +3,109 @@ package server
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	blog "go_grpc_blog/api"
+	"go_grpc_blog/db"
 
+	"github.com/go-redis/redis/v8"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"gorm.io/gorm"
 )
-
-func formatTimestamp(isoTimestamp string) (string, error) {
-	t, err := time.Parse(time.RFC3339, isoTimestamp)
-	if err != nil {
-		return "", err
-	}
-
-	formatted := t.Format("15:04:05 02.01.2006")
-	return formatted, nil
-}
-
-func sortPostsByCreatedAt(posts []*blog.Post, ascending bool) {
-	sort.Slice(posts, func(i, j int) bool {
-		parseTime := func(s string) time.Time {
-			parts := strings.Split(s, " ")
-			if len(parts) != 2 {
-				return time.Time{}
-			}
-			t, _ := time.Parse("15:04:05 02.01.2006", parts[0]+" "+parts[1])
-			return t
-		}
-
-		timeI := parseTime(posts[i].CreatedAt)
-		timeJ := parseTime(posts[j].CreatedAt)
-
-		if ascending {
-			return timeI.Before(timeJ)
-		}
-		return timeI.After(timeJ)
-	})
-}
 
 type Server struct {
 	blog.UnimplementedBlogServiceServer
-	Posts []*blog.Post
-	Users map[string]*blog.User
+	Sql_DB   *gorm.DB
+	Redis_DB *redis.Client
+}
+
+func NewServer(sqlDB *gorm.DB, redisAddr string) *Server {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+
+	server := &Server{
+		Sql_DB:   sqlDB,
+		Redis_DB: rdb,
+	}
+	return server
+}
+
+func dbPostToProtoPost(dbPost *db.Post, userID string) *blog.Post {
+	return &blog.Post{
+		Id: dbPost.ID,
+		Author: &blog.User{
+			Id:       dbPost.Author.ID,
+			NickName: dbPost.Author.NickName,
+			PhotoUrl: dbPost.Author.PhotoURL,
+		},
+		Body:      dbPost.Body,
+		CreatedAt: dbPost.CreatedAt.Format("15:04:05 02.01.2006"),
+	}
 }
 
 func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog.GetPostsResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing metadata")
+		return nil, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	headers := md.Get("user-id")
 	if len(headers) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
+	}
+	userID := headers[0]
+
+	dbPosts, err := GetCachedPosts(s, ctx)
+	if err != nil {
+		fmt.Println("Problems loading cache")
 	}
 
-	posts := make([]*blog.Post, 0)
-	for i, p := range s.Posts {
-		if int32(i) < req.Offset {
-			continue
+	if dbPosts == nil {
+		result := s.Sql_DB.Preload("Author").Order("created_at desc").Limit(int(req.Limit)).Offset(int(req.Offset)).Find(&dbPosts)
+		if result.Error != nil {
+			return nil, status.Errorf(codes.Internal, "failed to fetch posts: %v", result.Error)
 		}
-
-		if int32(len(posts)) >= req.Limit {
-			break
-		}
-		posts = append(posts, p)
 	}
 
-	sortPostsByCreatedAt(posts, false)
+	posts := make([]*blog.Post, len(dbPosts))
+
+	pipe := s.Redis_DB.Pipeline()
+	likeCmds := make([]*redis.StringCmd, len(dbPosts))
+	userLikeCmds := make([]*redis.StringCmd, len(dbPosts))
+
+	for i, p := range dbPosts {
+		postLikesKey := "post:" + p.ID + ":likes"
+		likeCmds[i] = pipe.HGet(ctx, postLikesKey, "total-likes")
+		userLikeCmds[i] = pipe.HGet(ctx, postLikesKey, userID)
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch likes: %v", err)
+	}
+
+	for i, p := range dbPosts {
+		totalLikes, err := likeCmds[i].Int64()
+		if err != nil && err != redis.Nil {
+			totalLikes = 0
+		}
+		if err == redis.Nil {
+			if err := s.Redis_DB.HSet(ctx, "post:"+p.ID+":likes", "total-likes", 0).Err(); err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to initialize likes count for post %s: %v", p.ID, err)
+			}
+		}
+
+		isLikedStr, err := userLikeCmds[i].Result()
+		isLiked := err == nil && isLikedStr == "1"
+
+		post := dbPostToProtoPost(&p, userID)
+		post.LikesCount = int32(totalLikes)
+		post.IsLiked = isLiked
+		posts[i] = post
+	}
 
 	return &blog.GetPostsResponse{Posts: posts}, nil
 }
@@ -79,111 +113,157 @@ func (s *Server) GetPosts(ctx context.Context, req *blog.GetPostsRequest) (*blog
 func (s *Server) CreatePost(ctx context.Context, req *blog.CreatePostRequest) (*blog.CreatePostResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing user id")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	authorID := userIDs[0]
-	author := s.Users[authorID]
 
-	// Check if user exists
-	if _, exists := s.Users[authorID]; !exists {
-		return nil, fmt.Errorf("user not found")
+	var user db.User
+	result := s.Sql_DB.First(&user, "id = ?", authorID)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "user not found: %v", result.Error)
 	}
 
-	time, err := formatTimestamp(time.Now().Format(time.RFC3339))
-	if err != nil {
-		return nil, err
+	newPost := db.Post{
+		ID:        fmt.Sprintf("post-%d", time.Now().UnixNano()),
+		Author:    user,
+		Body:      req.Body,
+		CreatedAt: time.Now(),
 	}
 
-	newPost := &blog.Post{
-		Id:         fmt.Sprintf("post-%d", len(s.Posts)+1),
-		Author:     author,
-		Body:       req.Body,
-		CreatedAt:  time,
-		LikesCount: 0,
-		IsLiked:    false,
+	result = s.Sql_DB.Create(&newPost)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create post: %v", result.Error)
 	}
 
-	s.Posts = append([]*blog.Post{newPost}, s.Posts...)
+	s.Sql_DB.Preload("Author").First(&newPost, "id = ?", newPost.ID)
+	protoPost := dbPostToProtoPost(&newPost, authorID)
 
-	return &blog.CreatePostResponse{Post: newPost}, nil
+	return &blog.CreatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) UpdatePost(ctx context.Context, req *blog.UpdatePostRequest) (*blog.UpdatePostResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing user id")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	currentUserID := userIDs[0]
 
-	for _, post := range s.Posts {
-		if post.Id == req.Id {
-			if post.Author.Id != currentUserID {
-				return nil, fmt.Errorf("only author can update the post")
-			}
-			post.Body = req.Body
-			return &blog.UpdatePostResponse{Post: post}, nil
-		}
+	var dbPost db.Post
+	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.Id)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "post not found: %v", result.Error)
 	}
 
-	return nil, fmt.Errorf("post not found")
+	if dbPost.Author.ID != currentUserID {
+		return nil, status.Error(codes.PermissionDenied, "only author can update the post")
+	}
+
+	dbPost.Body = req.Body
+	dbPost.CreatedAt = time.Now()
+	result = s.Sql_DB.Save(&dbPost)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update post: %v", result.Error)
+	}
+
+	protoPost := dbPostToProtoPost(&dbPost, currentUserID)
+	return &blog.UpdatePostResponse{Post: protoPost}, nil
 }
 
 func (s *Server) DeletePost(ctx context.Context, req *blog.DeletePostRequest) (*blog.DeletePostResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing user id")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
 	}
 	currentUserID := userIDs[0]
 
-	for i, post := range s.Posts {
-		if post.Id == req.Id {
-			// Check if current user is the author
-			if post.Author.Id != currentUserID {
-				return nil, fmt.Errorf("only author can delete the post")
-			}
-			s.Posts = append(s.Posts[:i], s.Posts[i+1:]...)
-			return &blog.DeletePostResponse{}, nil
-		}
+	var dbPost db.Post
+	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.Id)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "post not found: %v", result.Error)
 	}
 
-	return nil, fmt.Errorf("post not found")
+	if dbPost.Author.ID != currentUserID {
+		return nil, status.Error(codes.PermissionDenied, "only author can delete the post")
+	}
+
+	result = s.Sql_DB.Delete(&dbPost)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete post: %v", result.Error)
+	}
+
+	return &blog.DeletePostResponse{}, nil
 }
 
 func (s *Server) ToggleLike(ctx context.Context, req *blog.ToggleLikeRequest) (*blog.ToggleLikeResponse, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, fmt.Errorf("missing user id")
+		return nil, status.Error(codes.Unauthenticated, "missing metadata")
 	}
 	userIDs := md.Get("user-id")
 	if len(userIDs) == 0 {
-		return nil, fmt.Errorf("user-id header is required")
+		return nil, status.Error(codes.Unauthenticated, "user-id header is required")
+	}
+	userID := userIDs[0]
+
+	var dbPost db.Post
+	result := s.Sql_DB.Preload("Author").First(&dbPost, "id = ?", req.PostId)
+	if result.Error != nil {
+		return nil, status.Errorf(codes.NotFound, "post not found: %v", result.Error)
 	}
 
-	for _, post := range s.Posts {
-		if post.Id == req.PostId {
-			// Mock like toggle
-			if post.IsLiked {
-				post.LikesCount--
-				post.IsLiked = false
-			} else {
-				post.LikesCount++
-				post.IsLiked = true
-			}
-			return &blog.ToggleLikeResponse{Post: post}, nil
+	postLikesKey := "post:" + req.PostId + ":likes"
+
+	isLiked, err := s.Redis_DB.HGet(ctx, postLikesKey, userID).Bool()
+	if err != nil && err != redis.Nil {
+		return nil, status.Errorf(codes.Internal, "failed to check like status: %v", err)
+	}
+
+	if isLiked {
+		if err := s.Redis_DB.HDel(ctx, postLikesKey, userID).Err(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to remove like from Redis: %v", err)
+		}
+		if err := s.Redis_DB.HIncrBy(ctx, postLikesKey, "total-likes", -1).Err(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to decrement total likes: %v", err)
+		}
+		isLiked = false
+	} else {
+		if err := s.Redis_DB.HSet(ctx, postLikesKey, userID, true).Err(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to add like to Redis: %v", err)
+		}
+		if err := s.Redis_DB.HIncrBy(ctx, postLikesKey, "total-likes", 1).Err(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to increment total likes: %v", err)
+		}
+		isLiked = true
+	}
+
+	protoPost := dbPostToProtoPost(&dbPost, userID)
+
+	totalLikes, err := s.Redis_DB.HGet(ctx, postLikesKey, "total-likes").Int64()
+	if err != nil && err != redis.Nil {
+		return nil, status.Errorf(codes.Internal, "failed to get total likes: %v", err)
+	}
+	if err == redis.Nil {
+		pipe := s.Redis_DB.Pipeline()
+		pipe.HSet(ctx, postLikesKey, "total-likes", totalLikes)
+		if _, err := pipe.Exec(ctx); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to initialize Redis likes: %v", err)
 		}
 	}
 
-	return nil, fmt.Errorf("post not found")
+	protoPost.LikesCount = int32(totalLikes)
+	protoPost.IsLiked = isLiked
+
+	return &blog.ToggleLikeResponse{Post: protoPost}, nil
 }
