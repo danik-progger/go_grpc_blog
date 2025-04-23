@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+    grpc-server:
+        build: .
+        ports:
+            - 50051:50051
+        environment:
+            - REDIS_URL=redis:6379
+            - POSTGRES_DB=postgres
+            - POSTGRES_PORT=5432
+        depends_on:
+            redis:
+                condition: service_healthy
+            postgres:
+                condition: service_healthy
+
+    redis:
+        image: redis:alpine
+        ports:
+            - 6378:6379
+        volumes:
+            - ./db-data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 1s
+            timeout: 3s
+            retries: 30
+
+    postgres:
+        image: postgres:17.4
+        ports:
+            - 5432:5432
+        volumes:
+            - ./db/postgres/data:/var/lib/postgresql/data
+        environment:
+            POSTGRES_DB: postgres
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: pg_password
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U postgres"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
