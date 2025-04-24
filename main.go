@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 
 	"embed"
 
@@ -42,22 +43,21 @@ func main() {
 	logger.Info("main.go", zap.String("🟢", "Logger initialized"))
 
 	// SQL
-	sql_db, err := db.InitDB("host=localhost dbname=postgres port=5432 sslmode=disable TimeZone=UTC")
+	sql_db, err := db.InitDB("host=postgres database=postgres port=5432 user=postgres password=pg_password sslmode=disable TimeZone=UTC+3")
 	if err != nil {
 		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to initialize sql database: %v", err)))
+	} else {
+		logger.Info("main.go", zap.String("🟢", "Starting SQL DB  on port 5432"))
 	}
-	logger.Info("main.go", zap.String("🟢", "Starting SQL DB  on port 5432"))
 
 	// Redis
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
-
-	ctx := context.Background()
-	_, err = rdb.Ping(ctx).Result()
-	if err != nil {
-		logger.Info("main.go", zap.String("🔴", fmt.Sprintf("Failed to initialize redis database: %v", err)))
-
+	redisURL, exists := os.LookupEnv("REDIS_URL")
+	if !exists {
+		redisURL = "redis:6378"
 	}
-	logger.Info("main.go", zap.String("🟢", "Starting Redis DB on port 6379"))
+
+	rdb := redis.NewClient(&redis.Options{Addr: redisURL})
+	logger.Info("main.go", zap.String("🟢", "Starting Redis DB on port 6378"))
 
 	// Metrics
 	// We can analyze histogram for each method and each operation
